@@ -10,11 +10,14 @@ class AgentVaultProxy < Formula
   homepage "https://github.com/inflightsec/agent-vault-proxy"
 
   # Populated by the auto-bump bot (see .github/workflows/bump.yml) after
-  # each PyPI release. Pre-release the url + sha256 are sentinel values:
-  # 64 zeros parses as a valid sha256 so `brew audit` / `brew style` are
-  # clean, and the `odie` block in `def install` catches any non-HEAD
-  # install attempt with a clear message.
-  url "https://files.pythonhosted.org/packages/00/00/agent_vault_proxy-0.5.0.tar.gz"
+  # each PyPI release. Pre-release sentinel values:
+  #   - url keeps PLACEHOLDER path segments so .github/workflows/test.yml's
+  #     SHA256-mismatch check sees `*PLACEHOLDER*` and skips verification.
+  #   - sha256 is 64 zeros so `brew audit` / `brew style` are clean (the
+  #     audit rejects non-hex / wrong-length checksum literals).
+  # The `odie` block in `def install` catches any non-HEAD install attempt
+  # with a clear message regardless.
+  url "https://files.pythonhosted.org/packages/PLACEHOLDER/PLACEHOLDER/agent_vault_proxy-0.5.0.tar.gz"
   sha256 "0000000000000000000000000000000000000000000000000000000000000000"
   license "MIT"
 
