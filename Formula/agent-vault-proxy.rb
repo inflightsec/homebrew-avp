@@ -6,14 +6,16 @@
 class AgentVaultProxy < Formula
   include Language::Python::Virtualenv
 
-  desc "Just-in-time credential broker for AI agents — placeholders in, real secrets on the wire"
+  desc "Credential broker for AI agents — real keys never enter process env"
   homepage "https://github.com/inflightsec/agent-vault-proxy"
 
   # Populated by the auto-bump bot (see .github/workflows/bump.yml) after
-  # each PyPI release. Pre-release, the PLACEHOLDER fails fetch deliberately;
-  # use --HEAD (below) to install from the git branch in the meantime.
-  url "https://files.pythonhosted.org/packages/PLACEHOLDER_HASH_PREFIX/agent_vault_proxy-0.5.0.tar.gz"
-  sha256 "PLACEHOLDER_SHA256_TO_BE_REPLACED_AT_FIRST_RELEASE"
+  # each PyPI release. Pre-release the url + sha256 are sentinel values:
+  # 64 zeros parses as a valid sha256 so `brew audit` / `brew style` are
+  # clean, and the `odie` block in `def install` catches any non-HEAD
+  # install attempt with a clear message.
+  url "https://files.pythonhosted.org/packages/00/00/agent_vault_proxy-0.5.0.tar.gz"
+  sha256 "0000000000000000000000000000000000000000000000000000000000000000"
   license "MIT"
 
   head "https://github.com/inflightsec/agent-vault-proxy.git", branch: "main"
@@ -26,7 +28,7 @@ class AgentVaultProxy < Formula
   # working install path; see install method below.
 
   def install
-    venv = virtualenv_create(libexec, "python3.13")
+    virtualenv_create(libexec, "python3.13")
 
     if build.head?
       # HEAD: install from the cloned tree using the upstream's hash-pinned
