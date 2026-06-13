@@ -1,0 +1,28 @@
+agent-vault-proxy (macOS Homebrew tap)
+Copyright (c) 2026 inflightsec
+Licensed under the MIT License (see LICENSE).
+
+This product includes user-creation and lockdown code patterns adapted from
+SandVault (https://github.com/webcoyote/sandvault), Copyright (C) 2026
+Patrick Wyatt, licensed under the Apache License, Version 2.0.
+
+Specifically adapted:
+  - The `dscl . -create` flow for macOS system-user creation, including the
+    attribute set (UniqueID, PrimaryGroupID, RealName, NFSHomeDirectory,
+    UserShell, IsHidden, password via dscl -passwd).
+  - The `dseditgroup -o edit -d <user> -t user staff` lockdown step that
+    removes the new daemon user from the default macOS `staff` group.
+  - The `dseditgroup -o edit -a <user> -t user <group>` pattern for adding
+    the daemon user to its dedicated group.
+  - The random-password generation via `openssl rand -base64 32` to make
+    the system account unlogin-able.
+  - The `IsHidden 1` flag to hide the daemon account from the login window.
+
+These adaptations are clearly marked in the source code with citations to
+the upstream commit SHA and inline comments referencing the SandVault project.
+
+The full text of the Apache License, Version 2.0 is available at:
+  https://www.apache.org/licenses/LICENSE-2.0
+
+A copy of SandVault's LICENSE.md (Apache 2.0) is reproduced verbatim in
+`docs/reference/sandvault-LICENSE.md` for completeness, per Apache 2.0 § 4.

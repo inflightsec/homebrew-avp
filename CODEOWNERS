@@ -1,0 +1,22 @@
+# CODEOWNERS — enforces required-reviewer on every PR per ADR-0015.
+#
+# This file is the SINGLE POINT OF COMPROMISE for the brew distribution.
+# A takeover means malicious daemon URLs ship to every user on `brew upgrade`.
+# Required: every PR is reviewed by the maintainer before merge. No exceptions.
+#
+# The "adds CodeQL static analysis" PR pattern on a `chore/add-codeql-static-analysis`
+# branch is the @redhat-cloud-services worm's documented GitHub-propagation signature.
+# Treat any PR matching that pattern as a P0 review event regardless of who opened it.
+
+# Everything requires maintainer review.
+* @rathko
+
+# Formula and workflow changes ESPECIALLY require maintainer review.
+/Formula/                  @rathko
+/.github/workflows/        @rathko
+
+# Architecture and security docs require review even on typo fixes
+# (a typo in SECURITY-AUDIT.md that flips a defense claim is high-impact).
+/docs/SECURITY-AUDIT.md    @rathko
+/docs/WORM-DEFENSE.md      @rathko
+/docs/adr/                 @rathko

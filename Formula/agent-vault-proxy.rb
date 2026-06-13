@@ -1,0 +1,74 @@
+# Homebrew formula for agent-vault-proxy. Installs the daemon from PyPI
+# into an isolated virtualenv under the brew prefix. Privileged setup
+# (`_avp` user, install layout, CA, LaunchDaemon) is handled by the
+# `avp setup` command that ships INSIDE the package, not by this formula.
+
+class AgentVaultProxy < Formula
+  include Language::Python::Virtualenv
+
+  desc "Just-in-time credential broker for AI agents — placeholders in, real secrets on the wire"
+  homepage "https://github.com/inflightsec/agent-vault-proxy"
+
+  # Populated by the auto-bump bot (see .github/workflows/bump.yml) after
+  # each PyPI release. Pre-release, the PLACEHOLDER fails fetch deliberately;
+  # use --HEAD (below) to install from the git branch in the meantime.
+  url "https://files.pythonhosted.org/packages/PLACEHOLDER_HASH_PREFIX/agent_vault_proxy-0.5.0.tar.gz"
+  sha256 "PLACEHOLDER_SHA256_TO_BE_REPLACED_AT_FIRST_RELEASE"
+  license "MIT"
+
+  head "https://github.com/inflightsec/agent-vault-proxy.git", branch: "main"
+
+  depends_on "python@3.13"
+
+  # Resource blocks are populated by `brew update-python-resources Formula/agent-vault-proxy.rb`
+  # after each upstream release. DO NOT hand-edit — drift from the daemon's
+  # lockfile breaks supply-chain integrity. Pre-release, --HEAD is the only
+  # working install path; see install method below.
+
+  def install
+    venv = virtualenv_create(libexec, "python3.13")
+
+    if build.head?
+      # HEAD: install from the cloned tree using the upstream's hash-pinned
+      # lockfile, then the package with --no-deps to skip PyPI re-resolution.
+      system libexec/"bin/pip", "install",
+             "--require-hashes", "--only-binary=:all:",
+             "-r", buildpath/"requirements.lock"
+      system libexec/"bin/pip", "install", "--no-deps", buildpath
+    else
+      # STABLE without resources would install a broken venv. Fail loud.
+      odie <<~EOS
+        STABLE install requires `resource` blocks not yet populated.
+        Use:  brew install --HEAD inflightsec/avp/agent-vault-proxy
+        Or wait for v0.5.0 on PyPI + `brew update-python-resources`.
+      EOS
+    end
+
+    bin.install_symlink libexec/"bin/avp"
+  end
+
+  def caveats
+    <<~EOS
+      One-time setup (creates _avp user, install layout, CA, LaunchDaemon):
+
+        sudo avp setup
+        # add `--static` for a local file backend instead of Bitwarden
+
+      Add to ~/.zshenv so all shells (including non-interactive) inherit:
+
+        export HTTPS_PROXY="http://127.0.0.1:14322"
+        export NODE_EXTRA_CA_CERTS="/usr/local/etc/agent-vault-proxy/ca.pem"
+        export SSL_CERT_FILE="/usr/local/etc/agent-vault-proxy/ca.pem"
+        export NODE_USE_ENV_PROXY=1  # Node 22.21+/24.5+ ignores HTTPS_PROXY without this
+
+      Then:  avp env  (writes ~/.config/avp/env with placeholder exports — source it)
+             avp doctor  (verify install)
+    EOS
+  end
+
+  test do
+    assert_match "avp", shell_output("#{bin}/avp --help")
+    system bin/"avp", "doctor", "--help"
+    system bin/"avp", "setup", "--help"
+  end
+end

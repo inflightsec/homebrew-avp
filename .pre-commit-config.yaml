@@ -1,0 +1,38 @@
+# Pre-commit hooks. Install once with `pre-commit install`; CI runs the same
+# checks via `.github/workflows/security.yml` and `.github/workflows/test.yml`.
+#
+# Scope: this is a Homebrew tap, not a Python project. No ruff, no mypy, no
+# pytest. The checks below cover what the tap actually contains: shell
+# scripts, GitHub Actions workflows, YAML, and one Ruby formula.
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+        exclude: '^\.github/workflows/'   # workflows' `on:` key trips check-yaml; zizmor covers them
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ['--maxkb=200']
+      - id: detect-private-key
+
+  # Shell-script reference is the only shell code we ship; lint it.
+  - repo: https://github.com/koalaman/shellcheck-precommit
+    rev: v0.11.0
+    hooks:
+      - id: shellcheck
+        files: '^docs/reference/.*\.template$|^docs/reference/.*\.sh$'
+
+  # GH Actions security audit — unpinned actions, persist-credentials, etc.
+  - repo: https://github.com/zizmorcore/zizmor-pre-commit
+    rev: v1.25.2
+    hooks:
+      - id: zizmor
+
+  # TruffleHog is in CI only (.github/workflows/security.yml) — that job
+  # runs with fetch-depth: 0 over full history and is the authoritative
+  # gate. The official pre-commit hook trips on initial commits (no HEAD~1
+  # to diff against) and its bash -c entry can't be overridden via args,
+  # so it adds friction without adding coverage beyond CI.

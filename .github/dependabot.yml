@@ -1,0 +1,38 @@
+# Dependabot config — keeps pinned dependencies current without letting
+# them rot. This is a brew tap, so the only dependency surface is:
+#
+#   github-actions — every action SHA pinned in .github/workflows/
+#
+# (No Python, no Docker, no Ruby gems — Homebrew formulas declare
+# upstream URLs but those are bumped by the dedicated .github/workflows/
+# bump.yml watcher, not by Dependabot.)
+#
+# Cadence is weekly. Minor + patch updates grouped into one PR per week
+# to avoid PR firehose; majors get individual PRs because of semver risk
+# and intentional review burden.
+#
+# Cooldown: 7 days on all bump types. Mirrors the daemon repo's
+# dependabot.yml and the same supply-chain mitigation rationale
+# (Shai-Hulud-style same-day worm uploads). Dependabot won't even
+# *open* the PR until the cooldown passes.
+
+version: 2
+
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
+    groups:
+      actions-minor-patch:
+        patterns: ["*"]
+        update-types: [minor, patch]
+    labels:
+      - dependencies
+      - github-actions
+    commit-message:
+      prefix: "deps(actions)"

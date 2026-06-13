@@ -1,0 +1,78 @@
+---
+# Validates that the formula is well-formed and audits cleanly.
+# Reference hardening per the project's GitHub Actions hardening checklist
+# A1–I31 checklist — every third-party action is pinned to a 40-char SHA,
+# every job declares minimum required permissions, no pull_request_target.
+
+name: test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Default DENY for the entire workflow. Each job declares ONLY the permissions
+# it strictly requires. Defense against compromised actions silently elevating
+# (the @redhat-cloud-services pattern was elevation via OIDC subject claim that
+# wasn't pinned tightly enough — applies here too).
+permissions: {}
+
+jobs:
+  brew-test-bot:
+    runs-on: macos-14
+    permissions:
+      contents: read
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        # actions/checkout@v4 — pin to 40-char SHA before commit:
+        # uses: actions/checkout@<SHA>
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Homebrew
+        run: |
+          set -euo pipefail
+          # Homebrew is preinstalled on macos-14 runners.
+          brew --version
+          brew update --quiet
+
+      - name: Tap from local checkout
+        run: |
+          set -euo pipefail
+          mkdir -p "$(brew --repository)/Library/Taps/inflightsec"
+          ln -s "$PWD" "$(brew --repository)/Library/Taps/inflightsec/homebrew-avp"
+          brew tap | grep inflightsec/avp
+
+      - name: Audit formula (strict)
+        run: |
+          set -euo pipefail
+          brew audit --strict --formula inflightsec/avp/agent-vault-proxy
+
+      - name: Style check
+        run: |
+          set -euo pipefail
+          brew style --formula inflightsec/avp/agent-vault-proxy
+
+      - name: Verify SHA256 matches PyPI's published hash
+        run: |
+          set -euo pipefail
+          # The formula URL must point at PyPI; pull the upstream-recorded
+          # SHA256 and compare against the formula's sha256.
+          # This catches accidental drift between PyPI and the cask hash.
+          FORMULA_PATH=Formula/agent-vault-proxy.rb
+          FORMULA_URL=$(grep -E '^\s*url\s+"' "$FORMULA_PATH" | head -1 | sed -E 's/.*"(.*)"/\1/')
+          FORMULA_SHA=$(grep -E '^\s*sha256\s+"' "$FORMULA_PATH" | head -1 | sed -E 's/.*"(.*)"/\1/')
+          if [[ "$FORMULA_URL" == *PLACEHOLDER* ]] || [[ "$FORMULA_SHA" == *PLACEHOLDER* ]]; then
+            echo "Formula still has PLACEHOLDER values — pre-release state, skipping hash verification."
+            exit 0
+          fi
+          DOWNLOADED_SHA=$(curl -sL "$FORMULA_URL" | shasum -a 256 | awk '{print $1}')
+          if [[ "$DOWNLOADED_SHA" != "$FORMULA_SHA" ]]; then
+            echo "::error::SHA256 mismatch between formula and download"
+            echo "  formula: $FORMULA_SHA"
+            echo "  download: $DOWNLOADED_SHA"
+            exit 1
+          fi
+          echo "SHA256 matches: $FORMULA_SHA"

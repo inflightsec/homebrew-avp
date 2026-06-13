@@ -1,0 +1,261 @@
+#!/usr/bin/env bash
+#
+# avp-setup.sh — reference implementation of `avp setup`
+#
+# IMPORTANT: This file is a DESIGN-TIME REFERENCE that lives in the brew-tap
+# repo for visibility. The actual implementation ships in the
+# agent-vault-proxy daemon repo (at scripts/avp-setup.sh) and is invoked by
+# the Python `avp setup` command.
+#
+# This template captures:
+#   - The dscl-based user/group creation flow (adapted from webcoyote/sandvault,
+#     Apache 2.0)
+#   - The dseditgroup -d staff lockdown step (CRITICAL — see SandVault v1.1.24)
+#   - The sudoers.d install via visudo -cf validation (per ADR-0012)
+#   - Verification probes after each step (per LESSONS-FROM-SANDVAULT.md group-
+#     assignment-fails-silently lesson, v1.11.0)
+#   - Bash 3.2 compatibility (macOS default; SandVault v1.20.0 bug-fix lesson)
+#
+# Adapted from: https://github.com/webcoyote/sandvault/blob/<TO-BE-PINNED-AT-IMPLEMENTATION>/sv
+# Original copyright: Copyright (C) 2026 Patrick Wyatt
+# License: Apache 2.0 (see ../sandvault-LICENSE.md)
+#
+# WHAT THIS SCRIPT WRITES (allowed paths — exhaustive declaration):
+#   /Library/Application Support/agent-vault-proxy/         (state dir, 0750 _avp:_avp)
+#   /var/log/agent-vault-proxy/                             (audit log, 0750 _avp:_avp)
+#   /var/tmp/agent-vault-proxy/                             (TMPDIR for daemon)
+#   /Library/LaunchDaemons/com.inflightsec.agent-vault-proxy.plist (0644 root:wheel)
+#   /etc/sudoers.d/avp                                      (0440 root:wheel, via visudo)
+#   ~/.zshenv                                               (between sentinels only)
+#   ~/Library/LaunchAgents/org.inflightsec.avp.env.plist    (user-owned, 0644)
+#   ~/.claude/settings.json                                 (env block, between sentinels)
+#   ~/.claude.json                                          (mcpServers.*.env merge, between sentinels)
+#   Project-scoped .mcp.json files the user's user owns       (mcpServers.*.env merge)
+#   /Users/Shared/sv-${USER}/user/.zshenv                   (if SandVault installed)
+#
+# WHAT THIS SCRIPT NEVER WRITES (worm-defense declaration; reviewed against
+# @redhat-cloud-services and Shai-Hulud-class worm persistence paths):
+#   ~/.claude/hooks/**                                      (SessionStart hook persistence)
+#   ~/.vscode/tasks.json                                    (IDE hook persistence)
+#   ~/.github/workflows/** or any project's .github/workflows/  (CI propagation)
+#   ~/.bashrc, ~/.profile                                   (only .zshenv is touched)
+#   ~/.npmrc, ~/.netrc                                      (static-token files we never extend)
+#   ~/.ssh/**, ~/.aws/**, ~/.gnupg/**, ~/.kube/**           (out of scope)
+#   /etc/launchd.conf, /etc/pam.d/**, /etc/ssh/**           (system files we never touch)
+#   Any path outside the allowed-paths declaration above
+#
+# If avp setup ever writes to a path not in the allowed list above, that is
+# a SECURITY-RELEVANT CHANGE requiring an ADR update and SECURITY-AUDIT.md entry.
+# `avp doctor --strict` audits all paths the daemon and setup script COULD write
+# to and refuses to certify the install if anything is outside the allowed set.
+#
+# Key deviations from SandVault's pattern (per ADR-0016):
+#   - Singleton user `_avp` (not per-user sandvault-$USER)
+#   - Shell /usr/bin/false (not /bin/zsh — daemon, not interactive)
+#   - Home /var/empty (not a populated dir)
+#   - No shared-workspace ACLs (daemon owns its state exclusively)
+
+set -euo pipefail
+
+# Error trap → stderr per SandVault v1.20.0 lesson
+trap 'echo "ERROR at line $LINENO" >&2' ERR
+
+# Tight umask per SandVault v1.1.30 lesson (umask leakage)
+umask 077
+
+# Bash version check — fail early if running in tcsh or similar
+if [[ -z "${BASH_VERSION:-}" ]]; then
+  echo "This script requires bash. Re-run as: bash avp-setup.sh" >&2
+  exit 1
+fi
+
+# Configuration
+readonly AVP_USER="_avp"
+readonly AVP_GROUP="_avp"
+readonly AVP_REAL_NAME="Agent Vault Proxy"
+readonly AVP_GROUP_REAL_NAME="Agent Vault Proxy Group"
+readonly AVP_HOME="/var/empty"
+readonly AVP_SHELL="/usr/bin/false"
+readonly AVP_STATE_DIR="/Library/Application Support/agent-vault-proxy"
+readonly AVP_LOG_DIR="/var/log/agent-vault-proxy"
+readonly AVP_BWS_TOKEN_PATH="$AVP_STATE_DIR/bws-token"
+readonly AVP_CA_PATH="$AVP_STATE_DIR/ca.pem"
+readonly AVP_CA_KEY_PATH="$AVP_STATE_DIR/ca-key.pem"
+readonly AVP_BINDINGS_PATH="$AVP_STATE_DIR/bindings.yaml"
+readonly AVP_LAUNCHDAEMON_PLIST="/Library/LaunchDaemons/com.inflightsec.agent-vault-proxy.plist"
+readonly AVP_SUDOERS_FILE="/etc/sudoers.d/avp"
+
+# UID/GID allocation — start in the project-reserved range 250-260
+# Per SandVault v1.16.0 lesson: pre-check before assignment to avoid collision
+allocate_id() {
+  local kind="$1"        # "user" or "group"
+  local search_attr="$2" # UniqueID or PrimaryGroupID
+  local candidate
+  for candidate in 250 251 252 253 254 255 256 257 258 259 260; do
+    if [[ "$kind" == "user" ]]; then
+      if ! dscl . -search /Users UniqueID "$candidate" 2>/dev/null | grep -q .; then
+        echo "$candidate"; return
+      fi
+    else
+      if ! dscl . -search /Groups PrimaryGroupID "$candidate" 2>/dev/null | grep -q .; then
+        echo "$candidate"; return
+      fi
+    fi
+  done
+  echo "ERROR: no free $kind ID in 250-260 range — please intervene" >&2
+  exit 2
+}
+
+require_root() {
+  if [[ $(id -u) -ne 0 ]]; then
+    echo "This script must run as root. Use: sudo $0" >&2
+    exit 1
+  fi
+}
+
+# Verify after creation per SandVault v1.11.0 lesson (group assignment can fail silently)
+verify_user_exists() {
+  if ! dscl . -read "/Users/$AVP_USER" >/dev/null 2>&1; then
+    echo "ERROR: $AVP_USER user creation failed silently" >&2
+    exit 3
+  fi
+}
+
+verify_group_exists() {
+  if ! dscl . -read "/Groups/$AVP_GROUP" >/dev/null 2>&1; then
+    echo "ERROR: $AVP_GROUP group creation failed silently" >&2
+    exit 3
+  fi
+}
+
+verify_group_membership() {
+  local user="$1"; local group="$2"; local should_be_in="$3"  # "yes" or "no"
+  local in_group
+  if dseditgroup -o checkmember -m "$user" "$group" >/dev/null 2>&1; then
+    in_group="yes"
+  else
+    in_group="no"
+  fi
+  if [[ "$in_group" != "$should_be_in" ]]; then
+    echo "ERROR: $user in $group is $in_group, expected $should_be_in" >&2
+    exit 3
+  fi
+}
+
+# === User and group creation (adapted from SandVault sv) =====================
+
+create_avp_group() {
+  if dscl . -read "/Groups/$AVP_GROUP" >/dev/null 2>&1; then
+    echo "Group $AVP_GROUP already exists; skipping create."
+    return
+  fi
+  local gid; gid=$(allocate_id group PrimaryGroupID)
+  dscl . -create "/Groups/$AVP_GROUP"
+  dscl . -create "/Groups/$AVP_GROUP" PrimaryGroupID "$gid"
+  dscl . -create "/Groups/$AVP_GROUP" RealName "$AVP_GROUP_REAL_NAME"
+  verify_group_exists
+}
+
+create_avp_user() {
+  if dscl . -read "/Users/$AVP_USER" >/dev/null 2>&1; then
+    echo "User $AVP_USER already exists; skipping create."
+    return
+  fi
+  local uid; uid=$(allocate_id user UniqueID)
+  local gid; gid=$(dscl . -read "/Groups/$AVP_GROUP" PrimaryGroupID | awk '{print $2}')
+  local random_pass; random_pass=$(openssl rand -base64 32)
+
+  dscl . -create "/Users/$AVP_USER"
+  dscl . -create "/Users/$AVP_USER" UniqueID "$uid"
+  dscl . -create "/Users/$AVP_USER" PrimaryGroupID "$gid"
+  dscl . -create "/Users/$AVP_USER" RealName "$AVP_REAL_NAME"
+  dscl . -create "/Users/$AVP_USER" NFSHomeDirectory "$AVP_HOME"
+  dscl . -create "/Users/$AVP_USER" UserShell "$AVP_SHELL"
+  dscl . -passwd "/Users/$AVP_USER" "$random_pass"
+  dscl . -create "/Users/$AVP_USER" IsHidden 1
+  verify_user_exists
+}
+
+# CRITICAL LOCKDOWN per SandVault v1.1.24 ("Remove sandvault user from staff group")
+lockdown_avp_user_group_membership() {
+  # Remove from default macOS staff group — staff has surprisingly wide access
+  dseditgroup -o edit -d "$AVP_USER" -t user staff 2>/dev/null || true
+  verify_group_membership "$AVP_USER" staff no
+
+  # Ensure user is in its own group (creation should have done this, but
+  # SandVault v1.11.0 says it can fail silently — verify and re-attempt)
+  if ! dseditgroup -o checkmember -m "$AVP_USER" "$AVP_GROUP" >/dev/null 2>&1; then
+    dseditgroup -o edit -a "$AVP_USER" -t user "$AVP_GROUP"
+  fi
+  verify_group_membership "$AVP_USER" "$AVP_GROUP" yes
+}
+
+# === State directories =======================================================
+
+create_state_dirs() {
+  install -d -m 0750 -o "$AVP_USER" -g "$AVP_GROUP" "$AVP_STATE_DIR"
+  install -d -m 0750 -o "$AVP_USER" -g "$AVP_GROUP" "$AVP_LOG_DIR"
+  install -d -m 0700 -o "$AVP_USER" -g "$AVP_GROUP" /var/tmp/agent-vault-proxy
+}
+
+# === Sudoers drop-in per ADR-0012 ============================================
+# SandVault v1.1.13: write to temp first, validate via visudo, atomic move.
+
+install_sudoers_dropin() {
+  local brew_prefix; brew_prefix=$(brew --prefix 2>/dev/null || echo /usr/local)
+  local tmpfile
+  tmpfile=$(mktemp /tmp/avp-sudoers.XXXXXX)
+  trap "rm -f '$tmpfile'" EXIT
+
+  cat > "$tmpfile" <<EOF
+# /etc/sudoers.d/avp — managed by avp setup; do not edit by hand.
+# Per ADR-0012: forces fresh authentication on every sudo avp invocation,
+# regardless of sudo's default 5-minute timestamp cache.
+#
+# Scoped to avp commands only. No NOPASSWD. No additional privileges granted.
+
+Cmnd_Alias AVP_CMNDS = $brew_prefix/bin/avp, /opt/homebrew/bin/avp, /usr/local/bin/avp
+Defaults!AVP_CMNDS timestamp_timeout=0
+EOF
+
+  # Validate before installing — SandVault v1.1.13 lesson
+  if ! visudo -cf "$tmpfile" >/dev/null 2>&1; then
+    echo "ERROR: sudoers drop-in failed visudo validation; refusing to install" >&2
+    rm -f "$tmpfile"
+    exit 4
+  fi
+
+  # Atomic move — never write directly to /etc/sudoers.d/avp
+  install -m 0440 -o root -g wheel "$tmpfile" "$AVP_SUDOERS_FILE"
+  rm -f "$tmpfile"
+  trap - EXIT
+}
+
+# === Main ====================================================================
+# (CA generation, BWS token entry, LaunchDaemon install, LaunchAgent install,
+#  SandVault detection + shell-env integration are sketched but elided for
+#  brevity in this reference template — see ARCHITECTURE.md "Install flow"
+#  section for the full sequence.)
+
+main() {
+  require_root
+  echo "Creating $AVP_GROUP group..."
+  create_avp_group
+  echo "Creating $AVP_USER user..."
+  create_avp_user
+  echo "Locking down group membership..."
+  lockdown_avp_user_group_membership
+  echo "Creating state directories..."
+  create_state_dirs
+  echo "Installing sudoers drop-in..."
+  install_sudoers_dropin
+
+  # TODO: implement remaining steps (CA generation, BWS token, LaunchDaemon,
+  # LaunchAgent, shell env, SandVault integration detection). Sketched in
+  # ARCHITECTURE.md; full implementation lives in the daemon repo.
+
+  echo ""
+  echo "Setup complete. Verify with: avp doctor"
+}
+
+main "$@"

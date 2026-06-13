@@ -1,0 +1,107 @@
+---
+# Watches the upstream agent-vault-proxy PyPI package and opens a PR to bump
+# the formula's url + sha256 when a new release lands.
+#
+# Runs on a schedule (every 6 hours) and on manual workflow_dispatch.
+# A human reviewer merges the PR — per ADR-0015, SHA256 bumps are NEVER
+# auto-merged. The tap repo's single point of compromise is precisely this
+# auto-bump flow; manual review on every bump is the gate.
+
+name: bump
+
+# Auto-opens a PR when upstream agent-vault-proxy releases a new PyPI version.
+# **PRs are NEVER auto-merged.** A human (the maintainer per CODEOWNERS) reviews each one.
+# This is the @redhat-cloud-services worm class defense at the tap-repo layer:
+# even with a compromised CI, an attacker cannot ship a malicious version to
+# users without bypassing the human review gate.
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+
+# Default DENY. Per-job permissions are MINIMUM-REQUIRED.
+permissions: {}
+
+jobs:
+  check-for-new-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Get current formula version
+        id: current
+        run: |
+          set -euo pipefail
+          VER=$(grep -E '^\s*url\s+"' Formula/agent-vault-proxy.rb | head -1 \
+                | sed -E 's/.*agent_vault_proxy-([0-9.]+)\.tar\.gz.*/\1/')
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+
+      - name: Get latest PyPI release
+        id: pypi
+        run: |
+          set -euo pipefail
+          # Query PyPI's JSON API for the latest published version + tarball hash.
+          # Endpoint returns: { "info": { "version": "X.Y.Z" }, "urls": [ { "filename": "...tar.gz", "url": "...", "digests": { "sha256": "..." } } ] }
+          PKG_JSON=$(curl -sL https://pypi.org/pypi/agent-vault-proxy/json)
+          LATEST_VER=$(echo "$PKG_JSON" | jq -r '.info.version')
+          TARBALL_URL=$(echo "$PKG_JSON" | jq -r '.urls[] | select(.filename | endswith(".tar.gz")) | .url')
+          TARBALL_SHA=$(echo "$PKG_JSON" | jq -r '.urls[] | select(.filename | endswith(".tar.gz")) | .digests.sha256')
+          echo "version=$LATEST_VER" >> "$GITHUB_OUTPUT"
+          echo "url=$TARBALL_URL" >> "$GITHUB_OUTPUT"
+          echo "sha=$TARBALL_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Decide whether to bump
+        id: decide
+        env:
+          CURRENT_VERSION: ${{ steps.current.outputs.version }}
+          PYPI_VERSION: ${{ steps.pypi.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ "$CURRENT_VERSION" == "$PYPI_VERSION" ]]; then
+            echo "No new release; current=$CURRENT_VERSION, pypi=$PYPI_VERSION"
+            echo "should_bump=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Bump needed: $CURRENT_VERSION -> $PYPI_VERSION"
+            echo "should_bump=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open PR
+        if: steps.decide.outputs.should_bump == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NEW_URL: ${{ steps.pypi.outputs.url }}
+          NEW_SHA: ${{ steps.pypi.outputs.sha }}
+          NEW_VER: ${{ steps.pypi.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Verify the upstream tarball hash matches PyPI's published digest BEFORE writing it.
+          # Defense against PyPI metadata drift / supply-chain shenanigans during the bump.
+          DOWNLOADED_SHA=$(curl -sL "$NEW_URL" | shasum -a 256 | awk '{print $1}')
+          if [[ "$DOWNLOADED_SHA" != "$NEW_SHA" ]]; then
+            echo "::error::PyPI metadata SHA mismatch — refusing to bump"
+            echo "  metadata says: $NEW_SHA"
+            echo "  download says: $DOWNLOADED_SHA"
+            exit 1
+          fi
+          BRANCH="bump-agent-vault-proxy-$NEW_VER"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          sed -i.bak -E "s|^(\s*url\s+).*|\1\"$NEW_URL\"|" Formula/agent-vault-proxy.rb
+          sed -i.bak -E "s|^(\s*sha256\s+).*|\1\"$NEW_SHA\"|" Formula/agent-vault-proxy.rb
+          rm Formula/agent-vault-proxy.rb.bak
+          git add Formula/agent-vault-proxy.rb
+          git commit -m "agent-vault-proxy $NEW_VER"
+          git push -u origin "$BRANCH"
+          gh pr create \
+            --title "agent-vault-proxy $NEW_VER" \
+            --body "Auto-bump to v$NEW_VER. SHA256 verified against PyPI tarball download. **Requires manual review per ADR-0015.**" \
+            --label "automated-bump"
