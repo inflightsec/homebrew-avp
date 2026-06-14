@@ -33,6 +33,11 @@ class AgentVaultProxy < Formula
   def install
     virtualenv_create(libexec, "python3.13")
 
+    # Homebrew 6.0.1 on macOS 26 (Tahoe) does not reliably bootstrap pip into
+    # the venv after virtualenv_create — the bundled-pip step exits silently
+    # and leaves libexec/bin/pip missing. Force it explicitly via ensurepip.
+    system libexec/"bin/python", "-m", "ensurepip", "--upgrade"
+
     if build.head?
       # HEAD: install from the cloned tree using the upstream's hash-pinned
       # lockfile, then the package with --no-deps to skip PyPI re-resolution.
