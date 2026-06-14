@@ -22,7 +22,7 @@ No Bitwarden account? `--static` keeps secrets in a local YAML file owned by `_a
 
 ## Hardened install
 
-The block above is the demo. For the full setup — env vars in `~/.zshenv`, MCP-server `env` blocks, `bindings.yaml`, `avp env` / `avp doctor`, update + remove — see [docs/INSTALL.md](docs/INSTALL.md).
+The block above is the demo. For the full setup — `avp run` as the recommended launcher, `~/.zshenv` patching as the fallback, MCP-server `env` blocks, `bindings.yaml`, `avp env` / `avp doctor`, update + remove — see [docs/INSTALL.md](docs/INSTALL.md).
 
 For maximum isolation, compose with [SandVault](https://github.com/webcoyote/sandvault): AVP brokers credentials, SandVault sandboxes the filesystem. Recipe in [docs/INSTALL.md](docs/INSTALL.md#compose-with-sandvault-for-full-isolation).
 
