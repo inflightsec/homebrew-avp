@@ -29,6 +29,19 @@ shellcheck docs/reference/avp-setup.sh.template
 
 CI runs the same checks. Passing locally means CI will pass on the same checks.
 
+## Testing an unreleased branch
+
+Fastest path: the daemon's own automated mac smoke test.
+
+```bash
+git clone -b <branch> https://github.com/inflightsec/agent-vault-proxy ~/src/avp
+cd ~/src/avp
+brew install bats-core
+bash tests/setup-e2e/run-macos.sh        # provisions, runs setup.bats, tears down
+```
+
+For brew formula testing against a branch, fork this tap and edit `Formula/agent-vault-proxy.rb`'s `head` line to point at the branch, then `brew install --HEAD <your-fork>/avp/agent-vault-proxy`.
+
 ## What this repo does NOT contain
 
 We are deliberate about what lives here and what lives elsewhere:
