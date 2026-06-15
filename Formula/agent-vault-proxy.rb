@@ -17,8 +17,8 @@ class AgentVaultProxy < Formula
   #     audit rejects non-hex / wrong-length checksum literals).
   # The `odie` block in `def install` catches any non-HEAD install attempt
   # with a clear message regardless.
-  url "https://files.pythonhosted.org/packages/PLACEHOLDER/PLACEHOLDER/agent_vault_proxy-0.5.0.tar.gz"
-  sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+  url "https://files.pythonhosted.org/packages/5a/9c/82d222f159a73080856e52e4aa3476cd14c8f09fcfe4f25ad796462a3540/agent_vault_proxy-0.6.0.tar.gz"
+  sha256 "5941158e853f8c5518ac343d6412d415b21860534d2cc59c09eb50dcc23cc017"
   license "MIT"
 
   head "https://github.com/inflightsec/agent-vault-proxy.git", branch: "main"
