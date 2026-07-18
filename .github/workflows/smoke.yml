@@ -8,9 +8,12 @@
 # `test.yml` still audits/styles every PR cheaply; this job is the heavier
 # install + inject smoke, scoped to releases.
 #
-# Runner: macos-15 is arm64 (Apple Silicon) — the environment real users run,
-# per Infrastructure ADR-0001. The smoke is hermetic (static backend, local
-# echo, plain HTTP): no Bitwarden token, no external service, no secrets.
+# Runners: the two newest macOS majors (Apple Silicon / arm64 — the environment
+# real users run, per Infrastructure ADR-0001). We cover the last TWO because
+# users don't upgrade immediately. Bump BOTH labels when a new major GAs
+# (e.g. when macos-27 lands -> [macos-27, macos-26]). The smoke is hermetic
+# (static backend, local echo, plain HTTP): no Bitwarden token, no external
+# service, no secrets.
 
 name: smoke
 
@@ -36,7 +39,13 @@ concurrency:
 
 jobs:
   brew-install-smoke:
-    runs-on: macos-15
+    name: brew-install-smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Last two macOS majors: Tahoe (26) and Sequoia (15). Keep both current.
+        os: [macos-26, macos-15]
     permissions:
       contents: read
     timeout-minutes: 25
