@@ -1,0 +1,87 @@
+---
+# End-to-end release gate: install the formula on a real macOS runner and
+# prove the installed proxy actually brokers a credential.
+#
+# COST/SPEED: runs ONLY when the formula or the smoke assets change (i.e. on
+# a version bump — the ~monthly release cadence), plus manual dispatch. Doc,
+# workflow-lint, and dependabot-Actions PRs do NOT spin up a macOS runner.
+# `test.yml` still audits/styles every PR cheaply; this job is the heavier
+# install + inject smoke, scoped to releases.
+#
+# Runners: the two newest macOS majors (Apple Silicon / arm64 — the environment
+# real users run, per Infrastructure ADR-0001). We cover the last TWO because
+# users don't upgrade immediately. Bump BOTH labels when a new major GAs
+# (e.g. when macos-27 lands -> [macos-27, macos-26]). The smoke is hermetic
+# (static backend, local echo, plain HTTP): no Bitwarden token, no external
+# service, no secrets.
+
+name: smoke
+
+on:
+  pull_request:
+    paths:
+      - 'Formula/**'
+      - 'smoke/**'
+      - '.github/workflows/smoke.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'Formula/**'
+      - 'smoke/**'
+      - '.github/workflows/smoke.yml'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  brew-install-smoke:
+    name: brew-install-smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Last two macOS majors: Tahoe (26) and Sequoia (15). Keep both current.
+        os: [macos-26, macos-15]
+    permissions:
+      contents: read
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: Tap from local checkout
+        run: |
+          set -euo pipefail
+          mkdir -p "$(brew --repository)/Library/Taps/inflightsec"
+          ln -s "$PWD" "$(brew --repository)/Library/Taps/inflightsec/homebrew-avp"
+          brew tap | grep inflightsec/avp
+
+      - name: Install (stable, from the formula's pinned PyPI sdist)
+        run: |
+          set -euo pipefail
+          brew install inflightsec/avp/agent-vault-proxy
+          command -v avp
+
+      - name: CLI surface present
+        run: |
+          set -euo pipefail
+          for v in env doctor setup secret run; do
+            avp "$v" --help >/dev/null
+          done
+          echo "avp subcommands ok: env doctor setup secret run"
+
+      - name: Map smoke hosts to loopback
+        run: |
+          set -euo pipefail
+          echo "127.0.0.1 upstream.test unbound.test" | sudo tee -a /etc/hosts
+
+      - name: End-to-end proxy smoke (static secret, local echo)
+        run: |
+          set -euo pipefail
+          bash smoke/run-smoke.sh

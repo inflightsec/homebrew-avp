@@ -9,26 +9,22 @@ class AgentVaultProxy < Formula
   desc "Credential broker for AI agents — real keys never enter process env"
   homepage "https://github.com/inflightsec/agent-vault-proxy"
 
-  # Populated by the auto-bump bot (see .github/workflows/bump.yml) after
-  # each PyPI release. Pre-release sentinel values:
-  #   - url keeps PLACEHOLDER path segments so .github/workflows/test.yml's
-  #     SHA256-mismatch check sees `*PLACEHOLDER*` and skips verification.
-  #   - sha256 is 64 zeros so `brew audit` / `brew style` are clean (the
-  #     audit rejects non-hex / wrong-length checksum literals).
-  # The `odie` block in `def install` catches any non-HEAD install attempt
-  # with a clear message regardless.
-  url "https://files.pythonhosted.org/packages/5a/9c/82d222f159a73080856e52e4aa3476cd14c8f09fcfe4f25ad796462a3540/agent_vault_proxy-0.6.0.tar.gz"
-  sha256 "5941158e853f8c5518ac343d6412d415b21860534d2cc59c09eb50dcc23cc017"
+  # url + sha256 point at the published PyPI sdist and are maintained by the
+  # auto-bump bot (see .github/workflows/bump.yml) after each PyPI release.
+  # The sdist ships the daemon's hash-pinned `requirements.lock`, so `def
+  # install` pins every dependency from it — no `resource` stanzas needed.
+  url "https://files.pythonhosted.org/packages/e0/36/38bf0574338061cd1f59143fec38ac03740f5322a52a6f8ae635a7bf3145/agent_vault_proxy-0.8.0.tar.gz"
+  sha256 "cc0a01ec6dc6d955d39e60e8f08491094b46586fc2e0e35c591105d9f961202f"
   license "MIT"
 
   head "https://github.com/inflightsec/agent-vault-proxy.git", branch: "main"
 
   depends_on "python@3.13"
 
-  # Resource blocks are populated by `brew update-python-resources Formula/agent-vault-proxy.rb`
-  # after each upstream release. DO NOT hand-edit — drift from the daemon's
-  # lockfile breaks supply-chain integrity. Pre-release, --HEAD is the only
-  # working install path; see install method below.
+  # No `resource` stanzas: dependencies are pinned from the daemon's in-tree
+  # `requirements.lock` (uv-generated, --generate-hashes, universal), which
+  # ships in both the PyPI sdist and the git HEAD tree. This keeps the brew
+  # install byte-identical to the daemon's own supply-chain-audited lockfile.
 
   def install
     virtualenv_create(libexec, "python3.13")
@@ -40,21 +36,14 @@ class AgentVaultProxy < Formula
     # so invoke pip as a module (`python -m pip`) which works regardless.
     system libexec/"bin/python", "-m", "ensurepip", "--upgrade"
 
-    if build.head?
-      # HEAD: install from the cloned tree using the upstream's hash-pinned
-      # lockfile, then the package with --no-deps to skip PyPI re-resolution.
-      system libexec/"bin/python", "-m", "pip", "install",
-             "--require-hashes", "--only-binary=:all:",
-             "-r", buildpath/"requirements.lock"
-      system libexec/"bin/python", "-m", "pip", "install", "--no-deps", buildpath
-    else
-      # STABLE without resources would install a broken venv. Fail loud.
-      odie <<~EOS
-        STABLE install requires `resource` blocks not yet populated.
-        Use:  brew install --HEAD inflightsec/avp/agent-vault-proxy
-        Or wait for v0.5.0 on PyPI + `brew update-python-resources`.
-      EOS
-    end
+    # Both the PyPI sdist (stable) and the git HEAD tree ship the daemon's
+    # hash-pinned universal lockfile at the buildpath root. Install every
+    # dependency from it (--require-hashes for supply-chain integrity), then
+    # the package itself with --no-deps to skip PyPI re-resolution.
+    system libexec/"bin/python", "-m", "pip", "install",
+           "--require-hashes", "--only-binary=:all:",
+           "-r", buildpath/"requirements.lock"
+    system libexec/"bin/python", "-m", "pip", "install", "--no-deps", buildpath
 
     bin.install_symlink libexec/"bin/avp"
   end
@@ -82,5 +71,7 @@ class AgentVaultProxy < Formula
     assert_match "avp", shell_output("#{bin}/avp --help")
     system bin/"avp", "doctor", "--help"
     system bin/"avp", "setup", "--help"
+    system bin/"avp", "secret", "--help"
+    system bin/"avp", "run", "--help"
   end
 end

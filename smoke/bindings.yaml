@@ -1,0 +1,43 @@
+version: 1
+
+# Hermetic smoke config for the Homebrew end-to-end test. Contains NO real
+# secret: the value is generated per-run by run-smoke.sh and written to the
+# static secrets file. The __SECRETS_PATH__ / __AUDIT_PATH__ sentinels are
+# substituted with per-run temp paths by run-smoke.sh before the daemon reads
+# this file.
+#
+# TEST_API_KEY is bound to upstream.test, which run-smoke.sh (and the CI
+# workflow) map to 127.0.0.1 via /etc/hosts for the duration of the smoke.
+# A request carrying the placeholder to the bound host must reach the local
+# echo server with the REAL value in the Authorization header; a request to
+# an unbound host must be denied. Plain-HTTP upstream (no TLS/CA needed) —
+# AVP brokers plain HTTP by design.
+
+secrets:
+  TEST_API_KEY:
+    placeholder: "test-PLACEHOLDER-01HXY1234567890ABC"
+    inject:
+      header: "Authorization"
+      format: "Bearer {TEST_API_KEY}"
+    bindings:
+      - host: "upstream.test"
+
+unmatched_destination_policy: deny
+
+cache:
+  ttl_seconds: 60
+  max_entries: 16
+  jitter_seconds: 5
+
+audit:
+  path: __AUDIT_PATH__
+  fail_on_unwritable: true
+
+preflight:
+  fail_on_warning: false
+
+backend:
+  type: static
+  config:
+    type: static
+    path: __SECRETS_PATH__
