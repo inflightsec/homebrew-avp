@@ -64,6 +64,20 @@ class AgentVaultProxy < Formula
 
       Then:  avp env  (writes ~/.config/avp/env with placeholder exports — source it)
              avp doctor  (verify install)
+
+      Add API keys later — your real key never enters the agent. Run the
+      generator and paste what it prints into your vault:
+
+        avp binding new --host api.stripe.com --name STRIPE_API_KEY
+
+      In Claude Code, skip the flags and just say "route my Stripe key through
+      avp". Install the skill ONCE by typing these as slash-commands in the
+      Claude Code chat (NOT terminal commands):
+
+        /plugin marketplace add inflightsec/agent-vault-proxy
+        /plugin install avp@agent-vault-proxy
+
+      Codex or another agent? No plugin store — just run the command above.
     EOS
   end
 
